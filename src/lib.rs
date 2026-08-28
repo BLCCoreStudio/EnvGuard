@@ -182,7 +182,18 @@ fn looks_like_sensitive_assignment(line: &str) -> bool {
         return false;
     };
 
-    let key = key.trim().to_ascii_uppercase();
+    let key = key.trim();
+    let mut key_characters = key.chars();
+    let Some(first_character) = key_characters.next() else {
+        return false;
+    };
+    if !(first_character.is_ascii_alphabetic() || first_character == '_')
+        || !key_characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return false;
+    }
+
+    let key = key.to_ascii_uppercase();
     let sensitive_name = [
         "API_KEY",
         "SECRET",
@@ -297,6 +308,14 @@ mod tests {
         let value = ["YOUR", "_API_KEY_HERE"].concat();
         let content = format!("{key}={value}\n");
         let findings = scan_bytes(Path::new("settings.example"), content.as_bytes());
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_source_code_declaration() {
+        let name = ["SERVICE_", "TOKEN"].concat();
+        let content = format!("const {name}: &str = \"synthetic-value-only\";\n");
+        let findings = scan_bytes(Path::new("source.rs"), content.as_bytes());
         assert!(findings.is_empty());
     }
 
