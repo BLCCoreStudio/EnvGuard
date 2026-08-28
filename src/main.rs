@@ -182,7 +182,9 @@ fn scan_staged_files() -> Result<Vec<Finding>, String> {
             .map_err(|error| format!("could not read staged file `{path}`: {error}"))?;
 
         if !blob.status.success() {
-            return Err(format!("could not read staged file `{path}` from the Git index"));
+            return Err(format!(
+                "could not read staged file `{path}` from the Git index"
+            ));
         }
 
         findings.extend(scan_bytes(Path::new(path), &blob.stdout));
