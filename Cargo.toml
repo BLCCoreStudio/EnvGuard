@@ -1,0 +1,13 @@
+[package]
+name = "envguard"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Catch secrets and sensitive files before they reach Git."
+license = "MIT"
+repository = "https://github.com/BLCCoreStudio/EnvGuard"
+readme = "README.md"
+keywords = ["secrets", "git", "security", "cli", "pre-commit"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
