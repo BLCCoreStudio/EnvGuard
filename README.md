@@ -13,7 +13,7 @@ envguard --staged
 
 Accidentally committing a real `.env` file, private key, access token, or password can turn into an incident quickly. EnvGuard is intentionally small enough to run locally as one extra check before code leaves your machine.
 
-The current v0.1.0 source detects a focused set of signals:
+The current v0.1.0 release detects a focused set of signals:
 
 - real `.env`-style filenames while allowing common example/template variants
 - common SSH private-key filenames
@@ -27,9 +27,30 @@ EnvGuard skips common generated directories such as `.git`, `target`, `node_modu
 
 ## Status
 
-EnvGuard is in early development. The v0.1.0 source is available for testing, but no GitHub Release has been published yet.
+EnvGuard v0.1.0 is the first public release. A Linux x86_64 archive and SHA-256 checksum are available on the [GitHub Releases page](https://github.com/BLCCoreStudio/EnvGuard/releases/tag/v0.1.0).
 
 This is a heuristic guardrail, **not a guarantee that a repository contains no secrets**. It should complement provider-side secret scanning, code review, least-privilege credentials, and secret rotation practices.
+
+## Install on Linux x86_64
+
+Download these two files from the [v0.1.0 release](https://github.com/BLCCoreStudio/EnvGuard/releases/tag/v0.1.0):
+
+- `EnvGuard-v0.1.0-linux-x86_64.tar.gz`
+- `EnvGuard-v0.1.0-linux-x86_64.tar.gz.sha256`
+
+Verify and extract the archive:
+
+```bash
+sha256sum -c EnvGuard-v0.1.0-linux-x86_64.tar.gz.sha256
+tar -xzf EnvGuard-v0.1.0-linux-x86_64.tar.gz
+./envguard --version
+```
+
+The expected archive SHA-256 is:
+
+```text
+ec3005bf9b565cfa462d8304ca8f0a481f33d63290f9ebe2917ef3deafaa25c4
+```
 
 ## Build from source
 
