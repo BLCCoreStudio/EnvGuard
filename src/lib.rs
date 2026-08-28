@@ -1,5 +1,8 @@
 use std::path::Path;
 
+const PRIVATE_KEY_BEGIN_MARKER: &str = "-----BEGIN ";
+const PRIVATE_KEY_END_LABEL: &str = "PRIVATE KEY-----";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     pub path: String,
@@ -29,7 +32,7 @@ pub fn scan_bytes(path: &Path, bytes: &[u8]) -> Vec<Finding> {
         let line_number = index + 1;
         let mut matched_specific_rule = false;
 
-        if line.contains("-----BEGIN ") && line.contains("PRIVATE KEY-----") {
+        if line.contains(PRIVATE_KEY_BEGIN_MARKER) && line.contains(PRIVATE_KEY_END_LABEL) {
             findings.push(Finding {
                 path: display_path.clone(),
                 line: line_number,
@@ -249,7 +252,11 @@ mod tests {
 
     #[test]
     fn flags_private_key_material() {
-        let content = ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\nabc\n"].concat();
+        let content = [
+            "-----BEGIN OPENSSH ",
+            "PRIVATE KEY-----\nabc\n",
+        ]
+        .concat();
         let findings = scan_bytes(Path::new("key.pem"), content.as_bytes());
         assert!(findings
             .iter()
@@ -315,5 +322,11 @@ mod tests {
         assert!(findings
             .iter()
             .any(|finding| finding.rule == "ssh-private-key-file"));
+    }
+
+    #[test]
+    fn source_does_not_trigger_its_own_rules() {
+        let findings = scan_bytes(Path::new("src/lib.rs"), include_bytes!("lib.rs"));
+        assert!(findings.is_empty(), "self-scan findings: {findings:?}");
     }
 }
