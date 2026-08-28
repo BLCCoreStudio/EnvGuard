@@ -1,5 +1,8 @@
 use std::path::Path;
 
+const PRIVATE_KEY_BEGIN_MARKER: &str = "-----BEGIN ";
+const PRIVATE_KEY_END_LABEL: &str = "PRIVATE KEY-----";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     pub path: String,
@@ -29,7 +32,7 @@ pub fn scan_bytes(path: &Path, bytes: &[u8]) -> Vec<Finding> {
         let line_number = index + 1;
         let mut matched_specific_rule = false;
 
-        if line.contains("-----BEGIN ") && line.contains("PRIVATE KEY-----") {
+        if line.contains(PRIVATE_KEY_BEGIN_MARKER) && line.contains(PRIVATE_KEY_END_LABEL) {
             findings.push(Finding {
                 path: display_path.clone(),
                 line: line_number,
@@ -179,7 +182,18 @@ fn looks_like_sensitive_assignment(line: &str) -> bool {
         return false;
     };
 
-    let key = key.trim().to_ascii_uppercase();
+    let key = key.trim();
+    let mut key_characters = key.chars();
+    let Some(first_character) = key_characters.next() else {
+        return false;
+    };
+    if !(first_character.is_ascii_alphabetic() || first_character == '_')
+        || !key_characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return false;
+    }
+
+    let key = key.to_ascii_uppercase();
     let sensitive_name = [
         "API_KEY",
         "SECRET",
@@ -249,7 +263,9 @@ mod tests {
 
     #[test]
     fn flags_private_key_material() {
-        let content = ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\nabc\n"].concat();
+        let begin = ["-----BEGIN OPENSSH", " "].concat();
+        let end = ["PRIVATE ", "KEY-----\nabc\n"].concat();
+        let content = format!("{begin}{end}");
         let findings = scan_bytes(Path::new("key.pem"), content.as_bytes());
         assert!(findings
             .iter()
@@ -296,6 +312,14 @@ mod tests {
     }
 
     #[test]
+    fn ignores_source_code_declaration() {
+        let name = ["SERVICE_", "TOKEN"].concat();
+        let content = format!("const {name}: &str = \"synthetic-value-only\";\n");
+        let findings = scan_bytes(Path::new("source.rs"), content.as_bytes());
+        assert!(findings.is_empty());
+    }
+
+    #[test]
     fn reports_line_number() {
         let key = ["SERVICE_", "TOKEN"].concat();
         let content = format!("MODE=dev\n{key}=a-real-looking-secret-value\n");
@@ -315,5 +339,11 @@ mod tests {
         assert!(findings
             .iter()
             .any(|finding| finding.rule == "ssh-private-key-file"));
+    }
+
+    #[test]
+    fn source_does_not_trigger_its_own_rules() {
+        let findings = scan_bytes(Path::new("src/lib.rs"), include_bytes!("lib.rs"));
+        assert!(findings.is_empty(), "self-scan findings: {findings:?}");
     }
 }
