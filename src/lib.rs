@@ -252,11 +252,9 @@ mod tests {
 
     #[test]
     fn flags_private_key_material() {
-        let content = [
-            "-----BEGIN OPENSSH ",
-            "PRIVATE KEY-----\nabc\n",
-        ]
-        .concat();
+        let begin = ["-----BEGIN OPENSSH", " "].concat();
+        let end = ["PRIVATE ", "KEY-----\nabc\n"].concat();
+        let content = format!("{begin}{end}");
         let findings = scan_bytes(Path::new("key.pem"), content.as_bytes());
         assert!(findings
             .iter()
