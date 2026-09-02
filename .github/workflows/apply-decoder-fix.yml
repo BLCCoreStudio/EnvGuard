@@ -1,0 +1,59 @@
+name: One-shot decoder fix
+
+on:
+  push:
+    branches:
+      - fix/utf16-secret-detection
+    paths:
+      - .github/workflows/apply-decoder-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fix/utf16-secret-detection
+      - name: Prefer strong UTF-16 evidence before UTF-8
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/lib.rs')
+          text = path.read_text()
+          old = '''fn decode_text(bytes: &[u8]) -> Option<Cow<'_, str>> {
+              if let Ok(text) = std::str::from_utf8(bytes) {
+                  return Some(Cow::Borrowed(text));
+              }
+
+              decode_utf16(bytes).map(Cow::Owned)
+          }
+          '''
+          new = '''fn decode_text(bytes: &[u8]) -> Option<Cow<'_, str>> {
+              let has_utf16_bom = bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]);
+              if has_utf16_bom || infer_utf16_endianness(bytes).is_some() {
+                  if let Some(text) = decode_utf16(bytes) {
+                      return Some(Cow::Owned(text));
+                  }
+              }
+
+              std::str::from_utf8(bytes).ok().map(Cow::Borrowed)
+          }
+          '''
+          if old not in text:
+              raise SystemExit('expected decoder block not found')
+          path.write_text(text.replace(old, new, 1))
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit decoder fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/lib.rs
+          git commit -m "fix: prefer strong UTF-16 evidence before UTF-8"
+          git push origin HEAD:fix/utf16-secret-detection
