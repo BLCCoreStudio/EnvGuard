@@ -110,11 +110,14 @@ pub fn scan_bytes(path: &Path, bytes: &[u8]) -> Vec<Finding> {
 }
 
 fn decode_text(bytes: &[u8]) -> Option<Cow<'_, str>> {
-    if let Ok(text) = std::str::from_utf8(bytes) {
-        return Some(Cow::Borrowed(text));
+    let has_utf16_bom = bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]);
+    if has_utf16_bom || infer_utf16_endianness(bytes).is_some() {
+        if let Some(text) = decode_utf16(bytes) {
+            return Some(Cow::Owned(text));
+        }
     }
 
-    decode_utf16(bytes).map(Cow::Owned)
+    std::str::from_utf8(bytes).ok().map(Cow::Borrowed)
 }
 
 fn decode_utf16(bytes: &[u8]) -> Option<String> {
