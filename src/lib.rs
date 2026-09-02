@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::Path;
 
 const PRIVATE_KEY_BEGIN_MARKER: &str = "-----BEGIN ";
@@ -24,7 +25,7 @@ pub fn scan_bytes(path: &Path, bytes: &[u8]) -> Vec<Finding> {
         });
     }
 
-    let Ok(text) = std::str::from_utf8(bytes) else {
+    let Some(text) = decode_text(bytes) else {
         return findings;
     };
 
@@ -106,6 +107,68 @@ pub fn scan_bytes(path: &Path, bytes: &[u8]) -> Vec<Finding> {
     }
 
     findings
+}
+
+fn decode_text(bytes: &[u8]) -> Option<Cow<'_, str>> {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Some(Cow::Borrowed(text));
+    }
+
+    decode_utf16(bytes).map(Cow::Owned)
+}
+
+fn decode_utf16(bytes: &[u8]) -> Option<String> {
+    let (endianness, payload) = if let Some(payload) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        (Utf16Endianness::Little, payload)
+    } else if let Some(payload) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        (Utf16Endianness::Big, payload)
+    } else {
+        (infer_utf16_endianness(bytes)?, bytes)
+    };
+
+    if payload.is_empty() || payload.len() % 2 != 0 {
+        return None;
+    }
+
+    let units = payload
+        .chunks_exact(2)
+        .map(|pair| match endianness {
+            Utf16Endianness::Little => u16::from_le_bytes([pair[0], pair[1]]),
+            Utf16Endianness::Big => u16::from_be_bytes([pair[0], pair[1]]),
+        })
+        .collect::<Vec<_>>();
+
+    String::from_utf16(&units).ok()
+}
+
+#[derive(Clone, Copy)]
+enum Utf16Endianness {
+    Little,
+    Big,
+}
+
+fn infer_utf16_endianness(bytes: &[u8]) -> Option<Utf16Endianness> {
+    if bytes.len() < 8 || bytes.len() % 2 != 0 {
+        return None;
+    }
+
+    let pairs = bytes.len() / 2;
+    let zero_even = bytes.iter().step_by(2).filter(|byte| **byte == 0).count();
+    let zero_odd = bytes
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .filter(|byte| **byte == 0)
+        .count();
+    let threshold = (pairs * 2).div_ceil(3);
+
+    if zero_odd >= threshold && zero_even <= pairs / 4 {
+        Some(Utf16Endianness::Little)
+    } else if zero_even >= threshold && zero_odd <= pairs / 4 {
+        Some(Utf16Endianness::Big)
+    } else {
+        None
+    }
 }
 
 fn sensitive_filename(path: &Path) -> Option<(&'static str, &'static str)> {
@@ -246,6 +309,22 @@ fn looks_like_sensitive_assignment(line: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn utf16_le_bom(value: &str) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xfe];
+        for unit in value.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn utf16_be(value: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for unit in value.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_be_bytes());
+        }
+        bytes
+    }
+
     #[test]
     fn flags_dot_env_filename() {
         let findings = scan_bytes(Path::new(".env"), b"APP_MODE=development\n");
@@ -300,6 +379,26 @@ mod tests {
         assert!(findings
             .iter()
             .any(|finding| finding.rule == "sensitive-assignment"));
+    }
+
+    #[test]
+    fn scans_utf16_le_with_bom() {
+        let key = ["SERVICE_", "TOKEN"].concat();
+        let content = utf16_le_bom(&format!("MODE=dev\n{key}=a-real-looking-secret-value\n"));
+        let findings = scan_bytes(Path::new("settings.conf"), &content);
+        assert!(findings
+            .iter()
+            .any(|finding| finding.rule == "sensitive-assignment" && finding.line == 2));
+    }
+
+    #[test]
+    fn scans_bomless_utf16_be_when_byte_pattern_is_clear() {
+        let prefix = ["gh", "p_"].concat();
+        let content = utf16_be(&format!("VALUE={prefix}{}\n", "a".repeat(36)));
+        let findings = scan_bytes(Path::new("settings.conf"), &content);
+        assert!(findings
+            .iter()
+            .any(|finding| finding.rule == "github-token"));
     }
 
     #[test]
