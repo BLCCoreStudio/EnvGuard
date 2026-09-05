@@ -1,0 +1,125 @@
+name: Competitive benchmark
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/benchmark-competitive.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: EnvGuard vs Gitleaks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install benchmark tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes hyperfine time curl openssl
+
+      - name: Build EnvGuard
+        run: cargo build --release --locked
+
+      - name: Install pinned Gitleaks v8.30.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/gitleaks-extract
+          mkdir -p /tmp/gitleaks-extract
+          url='https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz'
+          curl -fL "$url" -o /tmp/gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp/gitleaks-extract
+          install -m 0755 /tmp/gitleaks-extract/gitleaks /tmp/gitleaks
+          /tmp/gitleaks version
+
+      - name: Create labeled fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/envguard-benign /tmp/envguard-positive
+          mkdir -p /tmp/envguard-benign /tmp/envguard-positive
+          for i in $(seq 1 2000); do
+            printf 'name=example-%s\nmode=test\nmessage=ordinary configuration data\n' "$i" > "/tmp/envguard-benign/config-$i.txt"
+          done
+          cp -a /tmp/envguard-benign/. /tmp/envguard-positive/
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/envguard-positive/test-private-key.pem 2>/dev/null
+
+      - name: Verify shared detection behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./target/release/envguard /tmp/envguard-benign >/tmp/envguard-benign.out
+          /tmp/gitleaks dir --no-banner --redact /tmp/envguard-benign >/tmp/gitleaks-benign.out
+
+          set +e
+          ./target/release/envguard /tmp/envguard-positive >/tmp/envguard-positive.out 2>&1
+          envguard_code=$?
+          /tmp/gitleaks dir --no-banner --redact /tmp/envguard-positive >/tmp/gitleaks-positive.out 2>&1
+          gitleaks_code=$?
+          set -e
+
+          test "$envguard_code" -eq 1
+          test "$gitleaks_code" -eq 1
+          grep -qi 'private' /tmp/envguard-positive.out
+          printf 'EnvGuard and Gitleaks both detected the synthetic private-key fixture.\n'
+
+      - name: Benchmark clean-directory scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          {
+            echo "workload=scan the same 2000-file benign directory for secrets"
+            echo "correctness=both also detect a separately generated synthetic RSA private key"
+            echo "runner=ubuntu-24.04"
+            echo "kernel=$(uname -srmo)"
+            echo "cpu=$(lscpu | awk -F: '/Model name/{gsub(/^[ \t]+/,"",$2); print $2; exit}')"
+            echo "envguard=$(./target/release/envguard --version)"
+            echo "gitleaks=$(/tmp/gitleaks version)"
+            echo "hyperfine=$(hyperfine --version | head -n1)"
+          } > benchmark-results/environment.txt
+
+          hyperfine --warmup 3 --runs 20 \
+            --export-json benchmark-results/clean-scan.json \
+            --export-markdown benchmark-results/clean-scan.md \
+            --command-name 'EnvGuard' './target/release/envguard /tmp/envguard-benign >/dev/null' \
+            --command-name 'Gitleaks 8.30.1' '/tmp/gitleaks dir --no-banner --redact /tmp/envguard-benign >/dev/null'
+
+          /usr/bin/time -v ./target/release/envguard /tmp/envguard-benign >/dev/null 2>benchmark-results/envguard-time-v.txt
+          /usr/bin/time -v /tmp/gitleaks dir --no-banner --redact /tmp/envguard-benign >/dev/null 2>benchmark-results/gitleaks-time-v.txt
+          cp /tmp/envguard-positive.out benchmark-results/envguard-positive-redacted.txt
+          cp /tmp/gitleaks-positive.out benchmark-results/gitleaks-positive-redacted.txt
+          cat benchmark-results/clean-scan.md
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [[ -f benchmark-results/environment.txt ]]; then
+            echo '## Environment' >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat benchmark-results/environment.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f benchmark-results/clean-scan.md ]]; then
+            echo '## Benign directory secret scan' >> "$GITHUB_STEP_SUMMARY"
+            cat benchmark-results/clean-scan.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload raw evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: envguard-competitive-benchmark-${{ github.sha }}
+          path: benchmark-results/
+          if-no-files-found: error
+          retention-days: 90
